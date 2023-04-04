@@ -1,0 +1,66 @@
+ARG PYTHON_VERSION
+ARG DEBIAN_DIST
+
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_DIST} AS base
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked\
+  --mount=type=cache,target=/var/lib/apt,sharing=locked\
+  --mount=type=tmpfs,target=/var/log\
+  set -ex;\
+  apt-get update;\
+  apt-get install -y --no-install-recommends libssl1.1 libsodium23 libffi7 libyaml-0-2
+
+FROM base AS builder
+
+ARG VERSION
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    RUST_VERSION=1.68.2
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked\
+  --mount=type=cache,target=/var/lib/apt,sharing=locked\
+  --mount=type=tmpfs,target=/var/log\
+  set -ex;\
+  apt-get update;\
+  apt-get install -y --no-install-recommends\
+    gcc\
+    git\
+    wget\
+    libc-dev\
+    libssl-dev\
+    libsodium-dev\
+    libffi-dev\
+    libyaml-dev\
+  ;\
+
+  dpkgArch="$(dpkg --print-architecture)"; \
+  case "${dpkgArch##*-}" in \
+      amd64) rustArch='x86_64-unknown-linux-gnu'; rustupSha256='bb31eaf643926b2ee9f4d8d6fc0e2835e03c0a60f34d324048aa194f0b29a71c' ;; \
+      armhf) rustArch='armv7-unknown-linux-gnueabihf'; rustupSha256='6626b90205d7fe7058754c8e993b7efd91dedc6833a11a225b296b7c2941194f' ;; \
+      arm64) rustArch='aarch64-unknown-linux-gnu'; rustupSha256='4ccaa7de6b8be1569f6b764acc28e84f5eca342f5162cd5c810891bff7ed7f74' ;; \
+      *) echo >&2 "unsupported architecture: ${dpkgArch}"; exit 1 ;; \
+  esac; \
+  url="https://static.rust-lang.org/rustup/archive/1.25.2/${rustArch}/rustup-init"; \
+  wget "$url"; \
+  echo "${rustupSha256} *rustup-init" | sha256sum -c -; \
+  chmod +x rustup-init; \
+  ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host ${rustArch}; \
+  rm rustup-init; \
+  chmod -R a+w $RUSTUP_HOME $CARGO_HOME;\
+
+  python3 -m venv --symlinks /opt/venv;\
+  /opt/venv/bin/pip install --no-cache-dir --verbose wheel;\
+  CARGO_NET_GIT_FETCH_WITH_CLI=true SODIUM_INSTALL=system /opt/venv/bin/pip install --no-cache-dir --verbose tahoe-lafs==${VERSION};\
+  /opt/venv/bin/pip uninstall --yes --no-cache-dir --verbose wheel
+
+FROM base
+
+COPY --from=builder /opt/venv/ /opt/venv/
+ADD tahoe-logs-tail.sh /usr/local/bin/
+
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+USER 65534
+ENTRYPOINT ["tahoe"]

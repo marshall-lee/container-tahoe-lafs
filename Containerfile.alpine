@@ -1,0 +1,35 @@
+ARG PYTHON_VERSION
+ARG ALPINE_VERSION
+
+FROM python:${PYTHON_VERSION}-alpine${ALPINE_VERSION}
+
+ARG VERSION
+
+RUN set -ex;\
+ apk update;\
+ apk add --no-cache libssl1.1 libsodium libffi yaml
+
+RUN set -ex;\
+ apk add --no-cache --virtual .build-deps\
+  gcc\
+  cargo\
+  git\
+  musl-dev\
+  openssl-dev\
+  libsodium-dev\
+  libffi-dev\
+  yaml-dev\
+ ;\
+ python3 -m venv --symlinks /opt/venv;\
+ /opt/venv/bin/pip install --no-cache-dir --verbose wheel;\
+ CARGO_NET_GIT_FETCH_WITH_CLI=true SODIUM_INSTALL=system /opt/venv/bin/pip install --no-cache-dir --verbose tahoe-lafs==${VERSION};\
+ /opt/venv/bin/pip uninstall --yes --no-cache-dir --verbose wheel;\
+ apk del --no-network .build-deps;\
+ rm -rf ~/.cargo ~/.cache
+
+ADD tahoe-logs-tail.sh /usr/local/bin/
+
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+USER 65534
+ENTRYPOINT ["tahoe"]
